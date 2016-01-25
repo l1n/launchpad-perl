@@ -1,0 +1,22 @@
+=head2 Mon Jan 25 11:28:24 2016: C<Module> L<MIDI::ALSA|MIDI::ALSA>
+
+=over 4
+
+=item *
+
+C<installed into: /home/sonika/Documents/launchpad-perl/perl5/lib/perl5>
+
+=item *
+
+C<LINKTYPE: dynamic>
+
+=item *
+
+C<VERSION: 1.20>
+
+=item *
+
+C<EXE_FILES: >
+
+=back
+
