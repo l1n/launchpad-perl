@@ -5,14 +5,25 @@
 use strict;
 use warnings;
 
-use English;
-$OUTPUT_AUTOFLUSH = 1;
+use IO::Handle;
+
+autoflush STDOUT 0;
+my $first = 1;
 
 my $user = $ENV{USER};
 my $auth = `cat .jirarc`;
 chomp $auth;
 while (1) {
-	system "curl -s --user-agent 'Intequeo/0.1' -H 'Authorization: Basic $auth' 'https://jira.ncbi.nlm.nih.gov/rest/api/2/search?jql=assignee='$user'+order+by+updatedDate+DESC'";
-	print "\n";
+	my $buf;
+	$buf .= "OPEN\t";
+	$buf .= qx[curl -s --user-agent 'Intequeo/0.1' -H 'Authorization: Basic $auth' 'https://jira.ncbi.nlm.nih.gov/rest/api/2/search?jql=assignee='$user'+AND+status!=Closed+order+by+priority,+updatedDate+DESC'];
+	$buf .= "\n";
+	sleep 60 unless $first;
+	$buf .= "CLOSED\t";
+	$buf .= qx[curl -s --user-agent 'Intequeo/0.1' -H 'Authorization: Basic $auth' 'https://jira.ncbi.nlm.nih.gov/rest/api/2/search?jql=assignee='$user'+AND+status=Closed+order+by+updatedDate+DESC'];
+	$buf .= "\n";
+	print $buf;
+	STDOUT->flush;
 	sleep 60;
+	$first = 0;
 }
