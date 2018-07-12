@@ -38,7 +38,7 @@ $JIRA_ENABLED = 1;
 
 my $is = IO::Select->new();
 
-my($tx, $rx, $nx, $ox, $sx, $jx);
+my($tx, $rx, $nx, $ox, $sx, $jx, $fx);
 open($tx, "|-", "./sendmidi", "dev", $device, '--') || die "Could not open TX pipe: $!";
 heat($tx);
 open($rx, "-|", "./receivemidi", "dev", $device, "on", "off") || die "Could not open RX pipe: $!";
@@ -53,8 +53,13 @@ open($ox, "-|", "sh outlook-notify.sh") || die "Could not open Outlook Notifier:
 heat($ox);
 $is->add($ox);
 
+open($fx, "-|", "perl firefox-sync.pl") || die "Could not open Firefox Sync: $!";
+heat($fx);
+$is->add($fx);
+
 tx("hex raw B0 00 01\n"); # X-Y layout
 tx("hex raw B0 00 00\n"); # Reset
+tx("hex raw B0 1E 05\n"); # Set brighness to low
 tx("hex raw F0 00 20 29 09 01\n"); # Start Text (Yellow, Non-Looping)
 tx("hex raw 42 4f 4f 54 49 4e 47 20 55 50\n"); # "BOOTING UP"
 tx("hex raw F7\n"); # End Text
@@ -124,29 +129,29 @@ my %hm = (
 my %mh = reverse %hm;
 
 my %jh = (
-		xy(0,2) => '/secure/Dashboard.jspa',
-		xy(1,2) => '/secure/Dashboard.jspa',
-		xy(2,2) => '/secure/Dashboard.jspa',
-		xy(3,2) => '/secure/Dashboard.jspa',
-		xy(0,3) => '/secure/Dashboard.jspa',
-		xy(1,3) => '/secure/Dashboard.jspa',
-		xy(2,3) => '/secure/Dashboard.jspa',
-		xy(3,3) => '/secure/Dashboard.jspa',
-		xy(0,4) => '/secure/Dashboard.jspa',
-		xy(1,4) => '/secure/Dashboard.jspa',
-		xy(2,4) => '/secure/Dashboard.jspa',
-		xy(3,4) => '/secure/Dashboard.jspa',
-		xy(0,5) => '/secure/Dashboard.jspa',
-		xy(1,5) => '/secure/Dashboard.jspa',
-		xy(2,5) => '/secure/Dashboard.jspa',
-		xy(3,5) => '/secure/Dashboard.jspa',
+		xy(0,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(1,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(2,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(3,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(0,3) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(1,3) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(2,3) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(3,3) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(0,4) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(1,4) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(2,4) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(3,4) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(0,5) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(1,5) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(2,5) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(3,5) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
 	 );
 my %jn = (
-	"Open"			=> 0,
-	"Stalled"		=> 1,
-	"Waiting on Reporter"	=> 2,
-	"Closed"		=> 3,
-);
+		"Open"			=> 0,
+		"Stalled"		=> 2,
+		"Waiting on Reporter"	=> 1,
+		"Closed"		=> 3,
+	 );
 
 my %ni = (
 		'C-2'  => 0,
@@ -197,6 +202,7 @@ my %ni = (
 		'C#5'  => 85,
 		'D5'   => 86,
 		'D#5'  => 87,
+		'E5'   => 88,
 		'C6'   => 96,
 		'C#6'  => 97,
 		'D6'   => 98,
@@ -205,6 +211,7 @@ my %ni = (
 		'F6'   => 101,
 		'F#6'  => 102,
 		'G6'   => 103,
+		'G#6'  => 104,
 		'E7'   => 112,
 		'F7'   => 113,
 		'F#7'  => 114,
@@ -216,6 +223,8 @@ my %ni = (
 		'C8'   => 120,
 		);
 
+my @ft;
+
 my $user = $ENV{USER};
 
 open($sx, "-|", "sh sysnote-load-notify.sh $user") || die "Could not open Sysnote Notifier: $!";
@@ -223,7 +232,6 @@ heat($sx);
 $is->add($sx);
 
 open($jx, "-|", "perl", "jira-notify.pl") || warn "Could not open Jira Notifier: $!" && ($JIRA_ENABLED = 0);
-my $jira_buffer = '';
 if ($JIRA_ENABLED) {
 	heat($jx);
 	$is->add($jx);
@@ -234,119 +242,177 @@ while (1) {
 	if ($key = ReadKey(-1)) {
 		if ($key eq '`') {
 			$SIG{HUP}->();
+		} elsif ($key eq '9') {
+			tx("hex raw B0 1E 05\n");
+		} elsif ($key eq '0') {
+			tx("hex raw B0 1E 00\n");
 		} elsif ($kt{$key}) {
 			tx("dec on $kt{$key} 63\n");
 		}
 	} else {
-		foreach my $fh ($is->can_read(-1)) {
-			if ($fh == $rx) {
-				$_ = <$rx>;
-				chomp;
-				my $raw = $_;
-				/      ([A-G]#?-?[0-8])/;
-				my $note = $1;
-				my ($x, $y) = ($ni{$note} % 16, int ($ni{$note} / 16));
-				print "RX: $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
-				if ($y == 7 && $x == 8) {
-					$DEBUG = !$DEBUG if $raw =~ /on/;
-				} elsif ($y == 7 && $x == 3) {
-					system "osascript", "ffnewtab.scpt", "http://sysnoteweb01.be-md.ncbi.nlm.nih.gov/" if $raw =~ /on/;
-				} elsif ($y < 2 && $x < 4) {
-					system "osascript", "app-activate.scpt", "Outlook" if $raw =~ /on/;
-					system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
-				} elsif ($y < 6 && $x < 4) {
-					system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov".$jh{$ni{$note}} if $raw =~ /on/;
-				} elsif ($y < 4 && $x < 4) {
-					system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
-				} elsif ($y > 5 || $x > 3) {
-					system "osascript", "ffnewtab.scpt", "https://nagios.ncbi.nlm.nih.gov/nagios/cgi/status.cgi?style=overview&hostgroup=".$mh{$ni{$note}} if $raw =~ /on/;
-				} else {
-					system "osascript", "app-activate.scpt", "Firefox" if $raw =~ /on/;
-				}
-			} elsif ($fh == $sx) {
-				$_ = <$sx>;
-				chomp;
-				print "$_ sysnotes active\n" if $DEBUG;
-				my $color = 46;
-				if ($_ == 0) {
-					$color = 28;
-				} elsif ($_ > 5) {
-					$color = 15;
-				} elsif ($_ > 0) {
-					$color = 13;
-				}
-				tx("dec on ".xy(3,7)." $color\n");
-			} elsif ($fh == $nx) {
-				$_ = <$nx>;
-				if ($_ eq "CLS\n") {
-					cls();
-				} else {
-					print if $DEBUG;
+		while (my @fhs = $is->can_read(-1)) {
+			foreach my $fh (@fhs) {
+				if ($fh == $rx) {
+					$_ = <$rx>;
 					chomp;
-					my ($host, $bads) = split /\t/;
-					my $color = 46;
-					if ($bads == 0) {
-						$color = 28;
-					} elsif ($bads > 50) {
-						$color = 15;
-					} elsif ($bads > 20) {
-						$color = 31;
-					} elsif ($bads > 10) {
-						$color = 23;
-					} elsif ($bads > 0) {
-						$color = 13;
-					}
-					tx("dec on $hm{$host} $color\n");
-				}
-			} elsif ($fh == $ox) {
-				$_ = <$ox>;
-				chomp;
-				my $BSIZE = 8;
-				$_ = 2**$BSIZE - 1 if $_ > 2**$BSIZE - 1;
-				my $bin = sprintf "%08b", $_;
-				print "Outlook $bin\n" if $DEBUG;
-				foreach (reverse 0 .. ($BSIZE - 1)) {
-					my @yneos = substr($bin, $_, 1) == 1 ? ("on", " 63") : ("off", " 00");
-					tx("dec $yneos[0] " . xy( $_ % 4, int ($_ / 4) ) . "$yneos[1]\n");
-				}
-			} elsif ($JIRA_ENABLED && $fh == $jx) {
-				$jira_buffer .= <$jx>;
-				print "JIRA BufLen ". length($jira_buffer) . "\n" if $DEBUG;
-				if ($jira_buffer =~ /\n/) {
-					my @jira_parts = split /\n/, $jira_buffer;
-					$_ = $jira_parts[0];
-					print "JIRA Buf $_\n" if $DEBUG;
-					$jira_buffer = $jira_parts[1];
-				}
-				my $BSIZE = 16;
-				my $struct = from_json($_);
-				my @tickets = sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$struct->{issues}};
-				my $partition = scalar @{$struct->{issues}} > 16 ? 16 : scalar @{$struct->{issues}};
-				for (my $i = 0; $i < $partition; $i++) {
-					my $ticket = $tickets[$i];
-					$jh{xy( $i % 4, int ($i / 4) + 2 )} = '/browse/' . $ticket->{key};
-					my $color = 0;
-					if ($ticket->{fields}->{status}->{name} eq "Open") {
-						$color = 63;
-					} elsif ($ticket->{fields}->{status}->{name} eq "Stalled") {
-						$color = 13;
-					} elsif ($ticket->{fields}->{status}->{name} eq "Waiting on Reporter") {
-						$color = 28;
-					} elsif ($ticket->{fields}->{status}->{name} eq "Closed") {
-						$color = 44;
+					my $raw = $_;
+					/      ([A-G]#?-?[0-8])/;
+					my $note = $1;
+					my ($x, $y) = ($ni{$note} % 16, int ($ni{$note} / 16));
+					print "RX: $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
+# NoteOn/NoteOff togle behavior implicitly relies on the slowness of Systems Events (AppleScript) in resoponding to tasks
+					if ($y == 7 && $x == 8) {
+						$DEBUG = !$DEBUG if $raw =~ /on/;
+					} elsif ($y == 5 && $x == 8 && $raw =~ /on/) {
+						$_ = `osascript fetchDialog.scpt`;
+						chomp;
+						s/ /%20/g;
+						system "osascript", "ffnewtab.scpt", "https://confluence.ncbi.nlm.nih.gov/dosearchsite.action?cql=siteSearch+~+%22$_%22+and+space.type+%3D+%22favourite%22&queryString=$_" if $_;
+					} elsif ($y == 6 && $x == 8 && $raw =~ /on/) {
+						$_ = `osascript fetchSelection.scpt`;
+						chomp;
+						system "osascript", "ffnewtab.scpt", "https://splunk.ncbi.nlm.nih.gov/en-US/app/search/search?q=search%20$_&display.page.search.mode=smart&dispatch.sample_ratio=1&earliest=rt-1h&latest=rt&sid=rt_1530281791.675292" if $raw =~ /on/;
+					} elsif ($y == 7 && $x == 3) {
+						system "osascript", "ffnewtab.scpt", "http://sysnoteweb01.be-md.ncbi.nlm.nih.gov/" if $raw =~ /on/;
+					} elsif ($y < 2 && $x < 4) {
+						system "osascript", "app-activate.scpt", "Outlook" if $raw =~ /on/;
+						system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
+					} elsif ($y < 6 && $x < 4) {
+						system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov".$jh{$ni{$note}}{url} if $raw =~ /on/;
+					} elsif ($y < 4 && $x < 4) {
+						system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
+					} elsif ($y > 5 || $x > 3) {
+						system "osascript", "ffnewtab.scpt", "https://nagios.ncbi.nlm.nih.gov/nagios/cgi/status.cgi?style=overview&hostgroup=".$mh{$ni{$note}} if $raw =~ /on/;
 					} else {
-						$color = 15;
+						system "osascript", "app-activate.scpt", "Firefox" if $raw =~ /on/;
 					}
-					tx("dec on " . xy( $i % 4, int ($i / 4) + 2 ) . " $color\n");
-				}
-				foreach ($partition .. ($BSIZE - 1)) {
-					$jh{xy( $_ % 4, int ($_ / 4) + 4 )} = '/secure/Dashboard.jspa';
-					tx("dec off " . xy( $_ % 4, int ($_ / 4) + 2 ) . " 00\n");
+				} elsif ($fh == $sx) {
+					$_ = <$sx>;
+					chomp;
+					print "$_ sysnotes active\n" if $DEBUG;
+					my $color = 46;
+					if ($_ == 0) {
+						$color = 28;
+					} elsif ($_ > 5) {
+						$color = 15;
+					} elsif ($_ > 0) {
+						$color = 13;
+					}
+					tx("dec on ".xy(3,7)." $color\n");
+				} elsif ($fh == $nx) {
+					$_ = <$nx>;
+					if ($_ eq "CLS\n") {
+						cls();
+					} else {
+						print if $DEBUG;
+						chomp;
+						my ($host, $bads) = split /\t/;
+						my $color = 46;
+						if ($bads == 0) {
+							$color = 28;
+						} elsif ($bads > 50) {
+							$color = 15;
+						} elsif ($bads > 20) {
+							$color = 31;
+						} elsif ($bads > 10) {
+							$color = 23;
+						} elsif ($bads > 0) {
+							$color = 13;
+						}
+						tx("dec on $hm{$host} $color\n");
+					}
+				} elsif ($fh == $ox) {
+					$_ = <$ox>;
+					chomp;
+					my $BSIZE = 8;
+					$_ = 2**$BSIZE - 1 if $_ > 2**$BSIZE - 1;
+					my $bin = sprintf "%08b", $_;
+					print "Outlook $bin\n" if $DEBUG;
+					foreach (reverse 0 .. ($BSIZE - 1)) {
+						my @yneos = substr($bin, $_, 1) == 1 ? ("on", " 63") : ("off", " 00");
+						tx("dec $yneos[0] " . xy( $_ % 4, int ($_ / 4) ) . "$yneos[1]\n");
+					}
+				} elsif ($fh == $fx) {
+					$_ = <$fx>;
+					print "FFX $_" if $DEBUG;
+					next unless $_;
+					my $ftab;
+					eval $_;
+					my @tab_urls;
+					foreach (@{$ftab->{windows}}) {
+						foreach (@{$_->{tabs}}) {
+							push @tab_urls, @{$_->{entries}}[-1]->{url} if @{$_->{entries}}[-1];
+						}
+					}
+					@ft = @tab_urls;
+					if ($JIRA_ENABLED) {
+						my @jm = keys %jh;
+						foreach my $xy_pack (@jm) {
+							my $ticket = $jh{$xy_pack};
+							my $color = 0;
+							print "$ticket->{key} ($ticket->{status})\n" if $DEBUG;
+							if (grep {/jira.ncbi/ && /$ticket->{url}/} @ft) {
+								$color = 28;
+							} elsif ($ticket->{status} eq "Open") {
+								$color = 63;
+							} elsif ($ticket->{status} eq "Stalled") {
+								$color = 32;
+							} elsif ($ticket->{status} eq "Waiting on Reporter") {
+								$color = 13;
+							} elsif ($ticket->{status} eq "Closed") {
+								$color = 28;
+							} else {
+								$color = 15;
+							}
+							tx("dec on " . $xy_pack . " $color\n");
+						}
+					}
+				} elsif ($JIRA_ENABLED && $fh == $jx) {
+					$_ = <$jx>;
+					$_ .= <$jx>; # Two lines required for a proper parsing, this will hang for up to 60 seconds if desynced
+						print "JIRA Buf $_" if $DEBUG;
+					my @jparts = split /\t|\n/;
+					my $BSIZE = 16;
+					my $ostruct = from_json($jparts[1]);
+					my $cstruct = from_json($jparts[3]);
+					my @tickets = sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$ostruct->{issues}};
+					push @tickets, sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$cstruct->{issues}};
+					my $sharp_tickets = $#tickets > $BSIZE ? $BSIZE : $#tickets;
+					for (my $i = 0; $i < $sharp_tickets; $i++) {
+						my $xy_pack = xy( $i % 4, int ($i / 4) + 2 );
+						my $ticket = $jh{$xy_pack};
+						$ticket->{key} = $tickets[$i]->{key};
+						$ticket->{url} = '/browse/' . $tickets[$i]->{key};
+						$ticket->{status} = $tickets[$i]->{fields}->{status}->{name};
+						my $color = 0;
+						print "$ticket->{key} ($ticket->{status})\n" if $DEBUG;
+						if (grep {/jira.ncbi/ && /$ticket->{url}/} @ft) {
+							$color = 28;
+						} elsif ($ticket->{status} eq "Open") {
+							$color = 63;
+						} elsif ($ticket->{status} eq "Stalled") {
+							$color = 32;
+						} elsif ($ticket->{status} eq "Waiting on Reporter") {
+							$color = 13;
+						} elsif ($ticket->{status} eq "Closed") {
+							$color = 28;
+						} else {
+							$color = 15;
+						}
+						tx("dec on " . $xy_pack . " $color\n");
+					}
+					foreach my $i ($sharp_tickets .. ($BSIZE - 1)) {
+						my $xy_pack = xy( $i % 4, int ($i / 4) + 2 );
+						my $ticket = $jh{$xy_pack};
+						$ticket->{url} = '/secure/Dashboard.jspa';
+						$ticket->{status} = 'Unknown';
+						tx("dec off " . $xy_pack . " 00\n");
+					}
 				}
 			}
 		}
 	}
-	usleep 10000;
+	usleep 100000;
 }
 END {
 	ReadMode 'normal';
