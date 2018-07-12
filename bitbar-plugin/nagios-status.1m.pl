@@ -11,8 +11,6 @@ foreach (@hostgroups) {
 	my $bads = $2;
 	if ($bads == 0) {
 		print ":ballot_box_with_check: ";
-	} elsif ($bads > 50) {
-		print ":warning: ";
 	} elsif ($bads > 20) {
 		print ":red_circle: ";
 	} elsif ($bads > 10) {
