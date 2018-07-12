@@ -22,4 +22,4 @@ foreach (@hostgroups) {
 	}
 }
 print "\n---\n";
-print map {chomp; /^(.*)\t(.*)/; sprintf "%-${max_length}s %03d | font=Courier href=https://nagios.ncbi.nlm.nih.gov/nagios/cgi/status.cgi?style=overview&hostgroup=$s\n", $1, $2, $1} @hostgroups;
+print map {chomp; /^(.*)\t(.*)/; sprintf "%-${max_length}s %03d | font=Courier href=https://nagios.ncbi.nlm.nih.gov/nagios/cgi/status.cgi?style=overview&hostgroup=%s\n", $1, $2, $1} @hostgroups;
