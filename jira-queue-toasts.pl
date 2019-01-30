@@ -20,10 +20,11 @@ my $last_ticket_count = 0;
 my $current_ticket_count = 0;
 do {
 	$current_ticket_count = qx[curl -s --user-agent 'Intequeo/0.1' -H 'Authorization: Basic $auth' 'https://jira.ncbi.nlm.nih.gov/rest/api/2/search?jql=project+=+SYS+AND+component+=+UNIX+AND+assignee+is+EMPTY+AND+(status+=+Open+OR+status+=+New)+ORDER+BY+created+DESC'];
-	$current_ticket_count = decode_json($current_ticket_count)->{'total'};
+	$current_ticket_count = decode_json($current_ticket_count);
 	if ($i) {
-		if ($current_ticket_count > $last_ticket_count) {
-			system "osascript ffjiranotify.scpt";
+		if ($current_ticket_count->{'total'} > $last_ticket_count) {
+			system "osascript ffjiranotify.scpt "+$current_ticket_count->{'issues'}[0]->{'key'};
+			$current_ticket_count = $current_ticket_count->{'total'}
 		}
 		sleep 30;
 	}
