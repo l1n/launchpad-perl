@@ -5,11 +5,13 @@ use warnings;
 
 use local::lib 'perl5';
 
+use Data::Dumper;
 use FindBin ();
 use File::Basename ();
-use File::Spec::Functions qw(catfile);
+use File::Spec::Functions qw( catfile );
 use IO::Select;
 use JSON;
+use Math::Int2Base qw( int2base );
 use MIME::Base64;
 use POSIX;
 use Term::ANSIScreen;
@@ -22,6 +24,7 @@ print("\e[3J\033]0;Intequeo\007\n");
 
 my $DEBUG;
 my $JIRA_ENABLED;
+my $CLEANED_UP;
 
 my $script = File::Basename::basename($0);
 my $SELF  = catfile($FindBin::Bin, $script);
@@ -35,25 +38,28 @@ my $device = shift @ARGV || 'Launchpad S'; # TODO sanitize
 
 $DEBUG = shift @ARGV || 0;
 $JIRA_ENABLED = 1;
+$CLEANED_UP = 0;
 
 my $is = IO::Select->new();
 
+my @subprocs;
+
 my($tx, $rx, $nx, $ox, $sx, $jx, $fx);
-open($tx, "|-", "./sendmidi", "dev", $device, '--') || die "Could not open TX pipe: $!";
+push @subprocs, open($tx, "|-", "./sendmidi", "dev", $device, '--') || die "Could not open TX pipe: $!";
 heat($tx);
-open($rx, "-|", "./receivemidi", "dev", $device, "on", "off") || die "Could not open RX pipe: $!";
+push @subprocs, open($rx, "-|", "./receivemidi", "dev", $device, "on", "off") || die "Could not open RX pipe: $!";
 heat($rx);
 $is->add($rx);
 
-open($nx, "-|", "sh nagios-notify.sh") || die "Could not open Nagios Notifier: $!";
+push @subprocs, open($nx, "-|", "sh nagios-notify.sh") || die "Could not open Nagios Notifier: $!";
 heat($nx);
 $is->add($nx);
 
-open($ox, "-|", "sh outlook-notify.sh") || die "Could not open Outlook Notifier: $!";
+push @subprocs, open($ox, "-|", "sh outlook-notify.sh") || die "Could not open Outlook Notifier: $!";
 heat($ox);
 $is->add($ox);
 
-open($fx, "-|", "perl firefox-sync.pl") || die "Could not open Firefox Sync: $!";
+push @subprocs, open($fx, "-|", "perl firefox-sync.pl") || die "Could not open Firefox Sync: $!";
 heat($fx);
 $is->add($fx);
 
@@ -129,6 +135,10 @@ my %hm = (
 my %mh = reverse %hm;
 
 my %jh = (
+		xy(0,1) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(1,1) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(2,1) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
+		xy(3,1) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
 		xy(0,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
 		xy(1,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
 		xy(2,2) => {url => '/secure/Dashboard.jspa', status => 'Unknown'},
@@ -194,6 +204,7 @@ my %ni = (
 		'A3'   => 69,
 		'A#3'  => 70,
 		'B3'   => 71,
+		'C4'   => 72,
 		'G#4'  => 80,
 		'A4'   => 81,
 		'A#4'  => 82,
@@ -227,11 +238,11 @@ my @ft;
 
 my $user = $ENV{USER};
 
-open($sx, "-|", "sh sysnote-load-notify.sh $user") || die "Could not open Sysnote Notifier: $!";
+push @subprocs, open($sx, "-|", "sh sysnote-load-notify.sh $user") || die "Could not open Sysnote Notifier: $!";
 heat($sx);
 $is->add($sx);
 
-open($jx, "-|", "perl", "jira-notify.pl") || warn "Could not open Jira Notifier: $!" && ($JIRA_ENABLED = 0);
+push @subprocs, open($jx, "-|", "perl", "jira-notify.pl") || warn "Could not open Jira Notifier: $!" && ($JIRA_ENABLED = 0);
 if ($JIRA_ENABLED) {
 	heat($jx);
 	$is->add($jx);
@@ -241,7 +252,12 @@ ReadMode 'cbreak';
 while (1) {
 	if ($key = ReadKey(-1)) {
 		if ($key eq '`') {
-			$SIG{HUP}->();
+		} elsif ($key eq 'd') {
+			print Dumper(\%jh);
+		} elsif ($key eq 'q') {
+			tx("hex raw B0 00 00\n"); # Reset
+			cleanup();
+			exit;
 		} elsif ($key eq '9') {
 			tx("hex raw B0 1E 05\n");
 		} elsif ($key eq '0') {
@@ -253,40 +269,72 @@ while (1) {
 		while (my @fhs = $is->can_read(-1)) {
 			foreach my $fh (@fhs) {
 				if ($fh == $rx) {
+					print "\b\bRX";
 					$_ = <$rx>;
 					chomp;
 					my $raw = $_;
 					/      ([A-G]#?-?[0-8])/;
 					my $note = $1;
 					my ($x, $y) = ($ni{$note} % 16, int ($ni{$note} / 16));
-					print "RX: $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
-# NoteOn/NoteOff togle behavior implicitly relies on the slowness of Systems Events (AppleScript) in resoponding to tasks
-					if ($y == 7 && $x == 8) {
+					{
+						no warnings;
+						print "RX: $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
+					}
+# NoteOn/NoteOff toggle behavior implicitly relies on the slowness of Systems Events (AppleScript) in resoponding to tasks
+					     if ($y == 7 && $x == 8) {
 						$DEBUG = !$DEBUG if $raw =~ /on/;
-					} elsif ($y == 5 && $x == 8 && $raw =~ /on/) {
+					} elsif ($y == 6 && $x == 8 && $raw =~ /on/) {
+						print "\b\bCO";
 						$_ = `osascript fetchDialog.scpt`;
 						chomp;
 						s/ /%20/g;
 						system "osascript", "ffnewtab.scpt", "https://confluence.ncbi.nlm.nih.gov/dosearchsite.action?cql=siteSearch+~+%22$_%22+and+space.type+%3D+%22favourite%22&queryString=$_" if $_;
-					} elsif ($y == 6 && $x == 8 && $raw =~ /on/) {
+					} elsif ($y == 5 && $x == 8 && $raw =~ /on/) {
+						print "\b\bSP";
 						$_ = `osascript fetchSelection.scpt`;
 						chomp;
-						system "osascript", "ffnewtab.scpt", "https://splunk.ncbi.nlm.nih.gov/en-US/app/search/search?q=search%20$_&display.page.search.mode=smart&dispatch.sample_ratio=1&earliest=rt-1h&latest=rt&sid=rt_1530281791.675292" if $raw =~ /on/;
+						system "osascript", "ffnewtab.scpt", "https://splunk.ncbi.nlm.nih.gov/en-US/app/search/search?q=search%20$_&display.page.search.mode=smart&dispatch.sample_ratio=1&earliest=rt-1h&latest=rt&sid=rt_1530281791.675292";
+					} elsif ($y == 4 && $x == 8 && $raw =~ /on/) {
+						print "\b\bJT";
+						$_ = `osascript fetchSelection.scpt`;
+						chomp;
+						if (/^\s*(?:SYS-)?(\d+)\s*$/) {
+							system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov/browse/SYS-$1";
+						} elsif ($_) {
+							print "\b\bJS";
+							system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov/issues/?jql=summary%20~%20%22$_%22%20OR%20description%20~%20%22$_%22%20ORDER%20BY%20updated%20DESC";
+						}
 					} elsif ($y == 7 && $x == 3) {
+						print "\b\bSN";
 						system "osascript", "ffnewtab.scpt", "http://sysnoteweb01.be-md.ncbi.nlm.nih.gov/" if $raw =~ /on/;
-					} elsif ($y < 2 && $x < 4) {
+					} elsif ($y < 1 && $x < 4) {
+						print "\b\bMX";
 						system "osascript", "app-activate.scpt", "Outlook" if $raw =~ /on/;
 						system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
 					} elsif ($y < 6 && $x < 4) {
+						print "\b\bJ#";
+						my $xy_pack = xy( $x, $y );
+						my $ticket = $jh{$xy_pack};
+						my $color = 28;
+						print "$ticket->{key} ($ticket->{status})\n" if $DEBUG;
+						tx("dec on " . $xy_pack . " $color\n");
 						system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov".$jh{$ni{$note}}{url} if $raw =~ /on/;
 					} elsif ($y < 4 && $x < 4) {
+						print "\b\bJ!";
 						system "osascript", "app-activate.scpt", "Terminal" if $raw =~ /off/;
 					} elsif ($y > 5 || $x > 3) {
+						print "\b\bNS";
 						system "osascript", "ffnewtab.scpt", "https://nagios.ncbi.nlm.nih.gov/nagios/cgi/status.cgi?style=overview&hostgroup=".$mh{$ni{$note}} if $raw =~ /on/;
+						my $xy_pack = xy( $x, $y );
+						my $color = 28;
+						print "$mh{$ni{$note}}\n" if $DEBUG;
+						tx("dec on " . $xy_pack . " $color\n");
 					} else {
+						print "\b\bFF";
 						system "osascript", "app-activate.scpt", "Firefox" if $raw =~ /on/;
 					}
 				} elsif ($fh == $sx) {
+					print "\b\bSX";
 					$_ = <$sx>;
 					chomp;
 					print "$_ sysnotes active\n" if $DEBUG;
@@ -300,6 +348,7 @@ while (1) {
 					}
 					tx("dec on ".xy(3,7)." $color\n");
 				} elsif ($fh == $nx) {
+					print "\b\bNX";
 					$_ = <$nx>;
 					if ($_ eq "CLS\n") {
 						cls();
@@ -307,6 +356,7 @@ while (1) {
 						print if $DEBUG;
 						chomp;
 						my ($host, $bads) = split /\t/;
+						next unless $hm{$host};
 						my $color = 46;
 						if ($bads == 0) {
 							$color = 28;
@@ -322,17 +372,26 @@ while (1) {
 						tx("dec on $hm{$host} $color\n");
 					}
 				} elsif ($fh == $ox) {
+					print "\b\bOX";
 					$_ = <$ox>;
 					chomp;
-					my $BSIZE = 8;
-					$_ = 2**$BSIZE - 1 if $_ > 2**$BSIZE - 1;
-					my $bin = sprintf "%08b", $_;
+					my $BSIZE = 4;
+					$_ = 4**$BSIZE - 1 if $_ > 4**$BSIZE - 1;
+					my $bin = int2base($_, 4);
+					$bin = 0 x ($BSIZE - length $bin) . $bin;
 					print "Outlook $bin\n" if $DEBUG;
+					my @numeric_code = (
+							["off", " 00"],
+							["on", " 28"],
+							["on", " 31"],
+							["on", " 15"],
+					);
 					foreach (reverse 0 .. ($BSIZE - 1)) {
-						my @yneos = substr($bin, $_, 1) == 1 ? ("on", " 63") : ("off", " 00");
+						my @yneos = @{$numeric_code[$_ < length $bin ? substr($bin, $_, 1) : 0]};
 						tx("dec $yneos[0] " . xy( $_ % 4, int ($_ / 4) ) . "$yneos[1]\n");
 					}
 				} elsif ($fh == $fx) {
+					print "\b\bFX";
 					$_ = <$fx>;
 					print "FFX $_" if $DEBUG;
 					next unless $_;
@@ -368,18 +427,28 @@ while (1) {
 						}
 					}
 				} elsif ($JIRA_ENABLED && $fh == $jx) {
+					print "\b\bJX";
 					$_ = <$jx>;
 					$_ .= <$jx>; # Two lines required for a proper parsing, this will hang for up to 60 seconds if desynced
 						print "JIRA Buf $_" if $DEBUG;
 					my @jparts = split /\t|\n/;
-					my $BSIZE = 16;
-					my $ostruct = from_json($jparts[1]);
-					my $cstruct = from_json($jparts[3]);
-					my @tickets = sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$ostruct->{issues}};
-					push @tickets, sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$cstruct->{issues}};
+					my $BSIZE = 20;
+					my ($ostruct, $cstruct);
+					eval {
+						$ostruct = from_json($jparts[1]);
+						$cstruct = from_json($jparts[3]);
+					} ; if ($@) {
+						next;
+					}
+					my @tickets;
+					{
+						no warnings;
+						@tickets = sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$ostruct->{issues}};
+						push @tickets, sort {$jn{$a->{fields}->{status}->{name}} <=> $jn{$b->{fields}->{status}->{name}}} @{$cstruct->{issues}};
+					}
 					my $sharp_tickets = $#tickets > $BSIZE ? $BSIZE : $#tickets;
 					for (my $i = 0; $i < $sharp_tickets; $i++) {
-						my $xy_pack = xy( $i % 4, int ($i / 4) + 2 );
+						my $xy_pack = xy( $i % 4, int ($i / 4) + 1 );
 						my $ticket = $jh{$xy_pack};
 						$ticket->{key} = $tickets[$i]->{key};
 						$ticket->{url} = '/browse/' . $tickets[$i]->{key};
@@ -402,7 +471,7 @@ while (1) {
 						tx("dec on " . $xy_pack . " $color\n");
 					}
 					foreach my $i ($sharp_tickets .. ($BSIZE - 1)) {
-						my $xy_pack = xy( $i % 4, int ($i / 4) + 2 );
+						my $xy_pack = xy( $i % 4, int ($i / 4) + 1 );
 						my $ticket = $jh{$xy_pack};
 						$ticket->{url} = '/secure/Dashboard.jspa';
 						$ticket->{status} = 'Unknown';
@@ -414,9 +483,17 @@ while (1) {
 	}
 	usleep 100000;
 }
-END {
+
+sub cleanup {
+	return if $CLEANED_UP++;
 	ReadMode 'normal';
 
+	if (!$DEBUG) {
+		tx("hex raw B0 00 00\n");
+	}
+
+	print "Killing data sources: @subprocs\n" if $DEBUG;
+	kill TERM => $_ foreach @subprocs;
 	close($tx);
 	close($rx);
 	close($nx);
@@ -451,3 +528,8 @@ sub prompt_for_password {
 
 	return $password;
 }
+
+END {
+	cleanup();
+}
+
