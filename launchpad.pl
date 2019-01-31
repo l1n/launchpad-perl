@@ -196,6 +196,7 @@ my %ni = (
 		'F2'   => 53,
 		'F#2'  => 54,
 		'G2'   => 55,
+		'G#2'  => 56,
 		'E3'   => 64,
 		'F3'   => 65,
 		'F#3'  => 66,
@@ -284,7 +285,7 @@ while (1) {
 					my ($x, $y) = ($ni{$note} % 16, int ($ni{$note} / 16));
 					{
 						no warnings;
-						print "RX: $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
+						print ": $note $ni{$note} {$x, $y} $mh{$ni{$note}}\n" if $DEBUG;
 					}
 # NoteOn/NoteOff toggle behavior implicitly relies on the slowness of Systems Events (AppleScript) in resoponding to tasks
 					     if ($y == 7 && $x == 8) {
