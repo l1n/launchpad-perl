@@ -248,6 +248,10 @@ if ($JIRA_ENABLED) {
 	$is->add($jx);
 }
 
+push @subprocs, open($qx, "-|", "perl", "jira-queue-toasts.pl", "subprocess") || die "Could not open Queue Monitor: $!";
+heat($qx);
+$is->add($qx);
+
 ReadMode 'cbreak';
 while (1) {
 	if ($key = ReadKey(-1)) {
@@ -304,6 +308,9 @@ while (1) {
 							print "\b\bJS";
 							system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov/issues/?jql=summary%20~%20%22$_%22%20OR%20description%20~%20%22$_%22%20ORDER%20BY%20updated%20DESC";
 						}
+					} elsif ($y == 3 && $x == 8) {
+						print "\b\bQT";
+						system "osascript", "ffnewtab.scpt", "https://jira.ncbi.nlm.nih.gov/issues/?filter=30407" if $raw =~ /on/;
 					} elsif ($y == 7 && $x == 3) {
 						print "\b\bSN";
 						system "osascript", "ffnewtab.scpt", "http://sysnoteweb01.be-md.ncbi.nlm.nih.gov/" if $raw =~ /on/;
@@ -347,6 +354,20 @@ while (1) {
 						$color = 13;
 					}
 					tx("dec on ".xy(3,7)." $color\n");
+				} elsif ($fh == $qx) {
+					print "\b\bQX";
+					$_ = <$qx>;
+					chomp;
+					print "$_ notes in the queue\n" if $DEBUG;
+					my $color = 46;
+					if ($_ == 0) {
+						$color = 28;
+					} elsif ($_ > 5) {
+						$color = 15;
+					} elsif ($_ > 0) {
+						$color = 13;
+					}
+					tx("dec on ".xy(8,3)." $color\n");
 				} elsif ($fh == $nx) {
 					print "\b\bNX";
 					$_ = <$nx>;
