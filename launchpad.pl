@@ -44,7 +44,7 @@ my $is = IO::Select->new();
 
 my @subprocs;
 
-my($tx, $rx, $nx, $ox, $sx, $jx, $fx);
+my($tx, $rx, $nx, $ox, $sx, $jx, $qx, $fx);
 push @subprocs, open($tx, "|-", "./sendmidi", "dev", $device, '--') || die "Could not open TX pipe: $!";
 heat($tx);
 push @subprocs, open($rx, "-|", "./receivemidi", "dev", $device, "on", "off") || die "Could not open RX pipe: $!";
@@ -248,9 +248,11 @@ if ($JIRA_ENABLED) {
 	$is->add($jx);
 }
 
-push @subprocs, open($qx, "-|", "perl", "jira-queue-toasts.pl", "subprocess") || die "Could not open Queue Monitor: $!";
-heat($qx);
-$is->add($qx);
+push @subprocs, open($qx, "-|", "perl", "jira-queue-toasts.pl", "subprocess") || warn "Could not open Queue Monitor: $!";
+if ($JIRA_ENABLED) {
+	heat($qx);
+	$is->add($qx);
+}
 
 ReadMode 'cbreak';
 while (1) {
@@ -519,6 +521,7 @@ sub cleanup {
 	close($rx);
 	close($nx);
 	if ($JIRA_ENABLED) {
+		close($qx);
 		close($jx);
 	}
 }
